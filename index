@@ -1,0 +1,2098 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { User, Role } from './types';
+import {
+  getUsers, getVisits, addUser, updateUser, deleteUser as delUser,
+  addVisit, deleteVisit as delVisit, generateId, getTodayVisits, todayStr,
+  getGasUrl, setGasUrl, getSheetId, setSheetId,
+  testConnection, syncFromServer, syncToServer
+} from './utils/storage';
+import QRCode from 'qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
+
+// ==================== HELPERS ====================
+const purposes = ['Membaca Buku', 'Belajar Mandiri', 'Diskusi Kelompok', 'Mengerjakan Tugas', 'Riset/Penelitian', 'Lainnya'];
+
+function formatDate(iso: string) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function formatDateTime(iso: string) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function QR({ text, size = 120 }: { text: string; size?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (ref.current && text) {
+      QRCode.toCanvas(ref.current, text, {
+        width: size, margin: 1,
+        color: { dark: '#1e1b4b', light: '#ffffff' }
+      });
+    }
+  }, [text, size]);
+  return <canvas ref={ref} />;
+}
+
+// Icon components
+const Icon = ({ d, cls = '' }: { d: string; cls?: string }) => (
+  <svg className={`w-5 h-5 ${cls}`} fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d={d} />
+  </svg>
+);
+const Icons = {
+  home: "m2.25 12 8.954-8.955a1.126 1.126 0 0 1 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25",
+  card: "M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z",
+  qr: "M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5Z",
+  history: "M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
+  users: "M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z",
+  chart: "M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z",
+  settings: "M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z",
+  logout: "M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9",
+  user: "M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z",
+  checkin: "M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
+  print: "M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0 1 10.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0 .229 2.523a1.125 1.125 0 0 1-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0 0 21 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 0 0-1.913-.247M6.34 18H5.25A2.25 2.25 0 0 1 3 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 0 1 1.913-.247m0 0a48.019 48.019 0 0 1 10.5 0m-10.5 0V5.625a2.25 2.25 0 0 1 2.25-2.25h5.25a2.25 2.25 0 0 1 2.25 2.25v3.044",
+  search: "m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z",
+  plus: "M12 4.5v15m7.5-7.5h-15",
+  x: "M6 18 18 6M6 6l12 12",
+  edit: "m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10",
+  trash: "m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0",
+  download: "M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3",
+  book: "M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25",
+};
+
+// ==================== QR SCANNER COMPONENT ====================
+function QRScanner({ onResult, onClose, title }: { onResult: (text: string) => void; onClose: () => void; title: string }) {
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState('');
+  const [manualId, setManualId] = useState('');
+  const stoppedRef = useRef(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const startScanner = async () => {
+      try {
+        const scannerId = 'qr-reader-' + Date.now();
+        if (containerRef.current) {
+          containerRef.current.id = scannerId;
+        }
+        const html5QrCode = new Html5Qrcode(scannerId);
+        scannerRef.current = html5QrCode;
+
+        await html5QrCode.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 220, height: 220 }, aspectRatio: 1 },
+          (decodedText) => {
+            if (!stoppedRef.current && mounted) {
+              stoppedRef.current = true;
+              html5QrCode.stop().catch(() => {});
+              onResult(decodedText);
+            }
+          },
+          () => {}
+        );
+      } catch (err: any) {
+        if (mounted) {
+          setError('Kamera tidak tersedia. Gunakan input manual di bawah.');
+        }
+      }
+    };
+    startScanner();
+    return () => {
+      mounted = false;
+      stoppedRef.current = true;
+      if (scannerRef.current) {
+        scannerRef.current.stop().catch(() => {});
+      }
+    };
+  }, [onResult]);
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-900/90 border-b border-white/10">
+        <h3 className="text-sm font-bold text-white">{title}</h3>
+        <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition">
+          <Icon d={Icons.x} cls="text-white" />
+        </button>
+      </div>
+
+      {/* Camera area */}
+      <div className="flex-1 flex flex-col items-center justify-center p-4 gap-4">
+        {error ? (
+          <div className="text-center space-y-4 w-full max-w-sm">
+            <div className="text-5xl">📷</div>
+            <div className="text-red-400 text-sm">{error}</div>
+            <div className="space-y-3">
+              <input
+                className="input-field text-center text-lg font-mono"
+                placeholder="Ketik ID manual..."
+                value={manualId}
+                onChange={e => setManualId(e.target.value)}
+                autoFocus
+              />
+              <button
+                onClick={() => { if (manualId.trim()) onResult(manualId.trim()); }}
+                disabled={!manualId.trim()}
+                className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${manualId.trim() ? 'btn-primary' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="relative w-full max-w-[280px] aspect-square rounded-2xl overflow-hidden border-2 border-indigo-500/50">
+              <div ref={containerRef} className="w-full h-full" />
+              {/* Scan line animation */}
+              <div className="absolute inset-0 pointer-events-none">
+                <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-400 to-transparent animate-scan" />
+              </div>
+              {/* Corner markers */}
+              <div className="absolute top-2 left-2 w-6 h-6 border-t-2 border-l-2 border-indigo-400 rounded-tl-lg" />
+              <div className="absolute top-2 right-2 w-6 h-6 border-t-2 border-r-2 border-indigo-400 rounded-tr-lg" />
+              <div className="absolute bottom-2 left-2 w-6 h-6 border-b-2 border-l-2 border-indigo-400 rounded-bl-lg" />
+              <div className="absolute bottom-2 right-2 w-6 h-6 border-b-2 border-r-2 border-indigo-400 rounded-br-lg" />
+            </div>
+            <p className="text-white/50 text-xs text-center">Arahkan kamera ke QR Code</p>
+
+            {/* Manual fallback */}
+            <div className="w-full max-w-sm space-y-2 mt-2">
+              <div className="text-center text-white/30 text-[10px]">— atau input manual —</div>
+              <div className="flex gap-2">
+                <input
+                  className="input-field text-sm font-mono flex-1"
+                  placeholder="Ketik ID..."
+                  value={manualId}
+                  onChange={e => setManualId(e.target.value)}
+                />
+                <button
+                  onClick={() => { if (manualId.trim()) { stoppedRef.current = true; scannerRef.current?.stop().catch(() => {}); onResult(manualId.trim()); } }}
+                  disabled={!manualId.trim()}
+                  className={`px-4 rounded-xl font-semibold text-sm transition-all ${manualId.trim() ? 'btn-primary' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ==================== MAIN APP ====================
+export default function App() {
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [page, setPage] = useState('landing');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('elib_current');
+    if (saved) {
+      const u = JSON.parse(saved);
+      setCurrentUser(u);
+      setPage(u.role === 'pengunjung' ? 'v-home' : u.role === 'pustakawan' ? 'p-home' : 'a-home');
+    }
+    // ensure defaults exist
+    getUsers();
+  }, []);
+
+  const login = (user: User) => {
+    localStorage.setItem('elib_current', JSON.stringify(user));
+    setCurrentUser(user);
+    setPage(user.role === 'pengunjung' ? 'v-home' : user.role === 'pustakawan' ? 'p-home' : 'a-home');
+  };
+
+  const logout = () => {
+    localStorage.removeItem('elib_current');
+    setCurrentUser(null);
+    setPage('landing');
+  };
+
+  if (!currentUser) {
+    if (page === 'register') return <RegisterPage onBack={() => setPage('landing')} onLogin={login} />;
+    if (page === 'login') return <LoginPage onBack={() => setPage('landing')} onLogin={login} />;
+    return <LandingPage onNavigate={setPage} />;
+  }
+
+  return (
+    <div className="h-full flex flex-col bg-slate-950">
+      {/* Top bar */}
+      <header className="flex-shrink-0 glass-dark px-4 py-2.5 flex items-center justify-between z-50">
+        <div className="flex items-center gap-2 min-w-0">
+          <img src={LOGO_URL} alt="Logo" className="w-8 h-8 object-contain rounded-full bg-white/10 p-0.5" />
+          <div className="flex flex-col min-w-0">
+            <span className="font-bold text-xs text-white truncate leading-tight">Perpustakaan SMAN 10 Pinrang</span>
+            <span className="text-[9px] text-white/40 leading-tight capitalize">{currentUser.role}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-white/50 hidden sm:inline truncate max-w-[120px]">{currentUser.name}</span>
+          <button onClick={logout} className="p-1.5 rounded-lg hover:bg-white/10 text-white/60 hover:text-red-400 transition-colors">
+            <Icon d={Icons.logout} />
+          </button>
+        </div>
+      </header>
+
+      {/* Content */}
+      <main className="flex-1 overflow-hidden">
+        {currentUser.role === 'pengunjung' && <VisitorPanel user={currentUser} page={page} setPage={setPage} setUser={(u) => { setCurrentUser(u); localStorage.setItem('elib_current', JSON.stringify(u)); }} />}
+        {currentUser.role === 'pustakawan' && <PustakaPanel user={currentUser} page={page} setPage={setPage} />}
+        {currentUser.role === 'admin' && <AdminPanel user={currentUser} page={page} setPage={setPage} />}
+      </main>
+
+      {/* Bottom nav */}
+      <BottomNav role={currentUser.role} page={page} setPage={setPage} />
+
+      {/* Footnote */}
+      <div className="flex-shrink-0 bg-slate-950 border-t border-white/5 text-center py-1">
+        <span className="text-[8px] text-white/15">Dikembangkan oleh Murdani © 2025</span>
+      </div>
+    </div>
+  );
+}
+
+// ==================== LANDING PAGE ====================
+const LOGO_URL = 'https://sman10pinrang.sch.id/wp-content/uploads/2021/02/cropped-cropped-pake-logo-ini-sman-10-png.png';
+
+function LandingPage({ onNavigate }: { onNavigate: (p: string) => void }) {
+  return (
+    <div className="h-full flex flex-col items-center justify-center relative overflow-hidden px-6">
+      {/* BG Effects */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-indigo-950/50 to-slate-950" />
+      <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-indigo-600/20 rounded-full blur-3xl animate-float" />
+      <div className="absolute bottom-1/4 right-1/4 w-48 h-48 bg-blue-600/20 rounded-full blur-3xl animate-float" style={{ animationDelay: '2s' }} />
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] border border-indigo-500/10 rounded-full spin-slow" />
+
+      <div className="relative z-10 text-center max-w-md animate-fade">
+        {/* Logo SMAN 10 Pinrang */}
+        <div className="w-24 h-24 mx-auto mb-5 rounded-full bg-white/10 backdrop-blur-sm border-2 border-white/20 p-2 shadow-xl shadow-indigo-500/20 animate-glow">
+          <img src={LOGO_URL} alt="Logo SMAN 10 Pinrang" className="w-full h-full object-contain" />
+        </div>
+
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full glass text-xs text-indigo-300 font-medium mb-3">
+          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+          Perpustakaan SMAN 10 Pinrang
+        </div>
+
+        <h1 className="text-3xl sm:text-4xl font-extrabold mb-3 leading-tight">
+          <span className="bg-gradient-to-r from-white via-indigo-200 to-blue-300 bg-clip-text text-transparent">
+            Buku Kunjungan
+          </span>
+          <br />
+          <span className="bg-gradient-to-r from-indigo-400 to-blue-400 bg-clip-text text-transparent">
+            Perpustakaan Digital
+          </span>
+        </h1>
+
+        <p className="text-white/50 text-sm mb-6 leading-relaxed">
+          Registrasi, cetak kartu digital, dan check-in kunjungan perpustakaan dengan mudah & cepat
+        </p>
+
+        <div className="flex flex-col sm:flex-row gap-3 justify-center mb-6">
+          <button onClick={() => onNavigate('register')} className="btn-primary text-base px-8 py-3">
+            Daftar Sekarang
+          </button>
+          <button onClick={() => onNavigate('login')} className="btn-glass text-base px-8 py-3">
+            Masuk
+          </button>
+        </div>
+
+        <div className="flex justify-center gap-3 flex-wrap">
+          {['Kartu Digital', 'QR Check-in', 'Multi Akun'].map(f => (
+            <span key={f} className="text-xs px-3 py-1.5 rounded-full glass text-white/60">✦ {f}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="absolute bottom-4 text-center text-white/25 text-[10px] leading-relaxed">
+        <div>Perpustakaan SMAN 10 Pinrang</div>
+        <div className="mt-0.5">Dikembangkan oleh <span className="text-indigo-400/60">Murdani</span> © 2025</div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== LOGIN PAGE ====================
+function LoginPage({ onBack, onLogin }: { onBack: () => void; onLogin: (u: User) => void }) {
+  const [email, setEmail] = useState('');
+  const [pass, setPass] = useState('');
+  const [err, setErr] = useState('');
+
+  const handleLogin = () => {
+    setErr('');
+    const users = getUsers();
+    const user = users.find(u => u.email === email && u.password === pass);
+    if (!user) return setErr('Email atau password salah');
+    if (!user.active) return setErr('Akun Anda dinonaktifkan. Hubungi admin.');
+    onLogin(user);
+  };
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center px-6 bg-slate-950 relative">
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-indigo-950/30 to-slate-950" />
+      <div className="relative z-10 w-full max-w-sm animate-fade">
+        <button onClick={onBack} className="text-white/40 text-sm mb-4 flex items-center gap-1 hover:text-white/70 transition">
+          ← Kembali
+        </button>
+        <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-white/10 p-1.5 border border-white/10">
+          <img src={LOGO_URL} alt="Logo" className="w-full h-full object-contain" />
+        </div>
+        <h2 className="text-xl font-bold text-white mb-0.5 text-center">Masuk</h2>
+        <p className="text-white/40 text-xs mb-5 text-center">Perpustakaan SMAN 10 Pinrang</p>
+
+        {err && <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs">{err}</div>}
+
+        <div className="space-y-3 mb-6">
+          <input className="input-field" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+          <input className="input-field" type="password" placeholder="Password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+        </div>
+        <button onClick={handleLogin} className="btn-primary w-full py-3 text-base">Masuk</button>
+      </div>
+    </div>
+  );
+}
+
+// ==================== REGISTER PAGE ====================
+function RegisterPage({ onBack, onLogin }: { onBack: () => void; onLogin: (u: User) => void }) {
+  const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', gender: 'L' as 'L' | 'P', birthDate: '', job: '', password: '', password2: '' });
+  const [photo, setPhoto] = useState('');
+  const [err, setErr] = useState('');
+
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setPhoto(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const submit = () => {
+    setErr('');
+    if (!form.name || !form.email || !form.phone || !form.password) return setErr('Nama, Email, No. HP, dan Password wajib diisi');
+    if (form.password.length < 6) return setErr('Password minimal 6 karakter');
+    if (form.password !== form.password2) return setErr('Password tidak cocok');
+    if (getUsers().find(u => u.email === form.email)) return setErr('Email sudah terdaftar');
+
+    const newUser: User = {
+      id: generateId('LIB'),
+      name: form.name,
+      email: form.email,
+      phone: form.phone,
+      address: form.address,
+      gender: form.gender,
+      birthDate: form.birthDate,
+      job: form.job,
+      role: 'pengunjung',
+      password: form.password,
+      photo,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+    addUser(newUser);
+    onLogin(newUser);
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-slate-950 relative">
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-indigo-950/30 to-slate-950" />
+      <div className="relative z-10 flex-1 flex flex-col px-6 py-6 max-w-sm mx-auto w-full">
+        <button onClick={onBack} className="text-white/40 text-sm mb-3 flex items-center gap-1 hover:text-white/70 transition flex-shrink-0">
+          ← Kembali
+        </button>
+        <div className="flex items-center gap-3 mb-4 flex-shrink-0">
+          <div className="w-12 h-12 rounded-full bg-white/10 p-1 border border-white/10 flex-shrink-0">
+            <img src={LOGO_URL} alt="Logo" className="w-full h-full object-contain" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-white leading-tight">Daftar Anggota</h2>
+            <p className="text-white/40 text-[10px]">Perpustakaan SMAN 10 Pinrang</p>
+          </div>
+        </div>
+
+        {err && <div className="mb-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex-shrink-0">{err}</div>}
+
+        <div className="flex-1 overflow-y-auto space-y-3 pb-4 scrollable">
+          {/* Photo */}
+          <div className="flex items-center gap-3">
+            <div className="w-14 h-14 rounded-xl bg-white/5 border border-white/10 overflow-hidden flex items-center justify-center flex-shrink-0">
+              {photo ? <img src={photo} className="w-full h-full object-cover" /> : <span className="text-white/20 text-2xl">👤</span>}
+            </div>
+            <label className="btn-glass text-xs cursor-pointer">
+              Upload Foto
+              <input type="file" accept="image/*" className="hidden" onChange={handlePhoto} />
+            </label>
+          </div>
+
+          <input className="input-field" placeholder="Nama Lengkap *" value={form.name} onChange={e => set('name', e.target.value)} />
+          <input className="input-field" placeholder="Email *" type="email" value={form.email} onChange={e => set('email', e.target.value)} />
+          <input className="input-field" placeholder="No. HP *" value={form.phone} onChange={e => set('phone', e.target.value)} />
+          <input className="input-field" placeholder="Alamat" value={form.address} onChange={e => set('address', e.target.value)} />
+          <div className="grid grid-cols-2 gap-3">
+            <select className="input-field" value={form.gender} onChange={e => set('gender', e.target.value)}>
+              <option value="L">Laki-laki</option>
+              <option value="P">Perempuan</option>
+            </select>
+            <input className="input-field" type="date" placeholder="Tanggal Lahir" value={form.birthDate} onChange={e => set('birthDate', e.target.value)} />
+          </div>
+          <input className="input-field" placeholder="Pekerjaan" value={form.job} onChange={e => set('job', e.target.value)} />
+          <input className="input-field" type="password" placeholder="Password * (min 6 karakter)" value={form.password} onChange={e => set('password', e.target.value)} />
+          <input className="input-field" type="password" placeholder="Ulangi Password *" value={form.password2} onChange={e => set('password2', e.target.value)} />
+        </div>
+
+        <button onClick={submit} className="btn-primary w-full py-3 text-base flex-shrink-0 mt-2">Daftar & Buat Kartu</button>
+      </div>
+    </div>
+  );
+}
+
+// ==================== BOTTOM NAV ====================
+function BottomNav({ role, page, setPage }: { role: Role; page: string; setPage: (p: string) => void }) {
+  const items = role === 'pengunjung'
+    ? [
+        { id: 'v-home', icon: Icons.home, label: 'Beranda' },
+        { id: 'v-card', icon: Icons.card, label: 'Kartu' },
+        { id: 'v-checkin', icon: Icons.qr, label: 'Check-in' },
+        { id: 'v-history', icon: Icons.history, label: 'Riwayat' },
+        { id: 'v-profile', icon: Icons.user, label: 'Profil' },
+      ]
+    : role === 'pustakawan'
+    ? [
+        { id: 'p-home', icon: Icons.home, label: 'Beranda' },
+        { id: 'p-checkin', icon: Icons.qr, label: 'Check-in' },
+        { id: 'p-members', icon: Icons.users, label: 'Anggota' },
+        { id: 'p-history', icon: Icons.history, label: 'Riwayat' },
+        { id: 'p-stats', icon: Icons.chart, label: 'Statistik' },
+      ]
+    : [
+        { id: 'a-home', icon: Icons.home, label: 'Beranda' },
+        { id: 'a-users', icon: Icons.users, label: 'Akun' },
+        { id: 'a-checkin', icon: Icons.qr, label: 'Check-in' },
+        { id: 'a-history', icon: Icons.history, label: 'Riwayat' },
+        { id: 'a-settings', icon: Icons.settings, label: 'Pengaturan' },
+      ];
+
+  return (
+    <nav className="flex-shrink-0 glass-dark border-t border-white/5 flex justify-around py-1.5 px-1 safe-bottom">
+      {items.map(item => {
+        const active = page === item.id;
+        return (
+          <button key={item.id} onClick={() => setPage(item.id)} className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl transition-all ${active ? 'text-indigo-400' : 'text-white/30 hover:text-white/60'}`}>
+            <Icon d={item.icon} cls={active ? 'text-indigo-400' : ''} />
+            <span className="text-[10px] font-medium">{item.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ==================== VISITOR PANEL ====================
+function VisitorPanel({ user, page, setPage, setUser }: { user: User; page: string; setPage: (p: string) => void; setUser: (u: User) => void }) {
+  const myVisits = getVisits().filter(v => v.userId === user.id);
+  const todayVisits = myVisits.filter(v => v.timestamp.startsWith(todayStr()));
+
+  if (page === 'v-card') return <CardPage user={user} />;
+  if (page === 'v-checkin') return <VisitorCheckin user={user} />;
+  if (page === 'v-history') return <VisitorHistory userId={user.id} />;
+  if (page === 'v-profile') return <ProfilePage user={user} setUser={setUser} />;
+
+  // Home
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <div>
+        <h2 className="text-lg font-bold text-white">Halo, {user.name.split(' ')[0]}! 👋</h2>
+        <p className="text-white/40 text-xs">Selamat datang di Perpustakaan Digital</p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Hari Ini', val: todayVisits.length, color: 'from-indigo-500 to-blue-500' },
+          { label: 'Bulan Ini', val: myVisits.filter(v => v.timestamp.startsWith(todayStr().slice(0, 7))).length, color: 'from-blue-500 to-cyan-500' },
+          { label: 'Total', val: myVisits.length, color: 'from-cyan-500 to-teal-500' },
+        ].map(s => (
+          <div key={s.label} className="card text-center">
+            <div className={`text-2xl font-bold bg-gradient-to-r ${s.color} bg-clip-text text-transparent`}>{s.val}</div>
+            <div className="text-[10px] text-white/40 mt-1">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button onClick={() => setPage('v-card')} className="card flex flex-col items-center gap-2 py-5 hover:bg-white/10 transition active:scale-95">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center">
+            <Icon d={Icons.card} cls="text-white" />
+          </div>
+          <span className="text-xs font-medium text-white/70">Kartu Digital</span>
+        </button>
+        <button onClick={() => setPage('v-checkin')} className="card flex flex-col items-center gap-2 py-5 hover:bg-white/10 transition active:scale-95">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
+            <Icon d={Icons.checkin} cls="text-white" />
+          </div>
+          <span className="text-xs font-medium text-white/70">Check-in</span>
+        </button>
+      </div>
+
+      {todayVisits.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold text-white/60 mb-2">Kunjungan Hari Ini</h3>
+          <div className="space-y-2">
+            {todayVisits.map(v => (
+              <div key={v.id} className="card flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-medium text-white">{v.purpose}</div>
+                  <div className="text-[10px] text-white/40">{formatDateTime(v.timestamp)}</div>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400">✓</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== CARD PAGE ====================
+function CardPage({ user }: { user: User }) {
+  const printRef = useRef<HTMLDivElement>(null);
+  const handlePrint = () => {
+    const el = printRef.current;
+    if (!el) return;
+    const w = window.open('', '', 'width=450,height=350');
+    if (!w) return;
+    w.document.write(`<html><head><title>Kartu Anggota</title><style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f1f5f9;font-family:sans-serif}*{box-sizing:border-box}</style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => { w.print(); w.close(); }, 400);
+  };
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.card} /> Kartu Digital</h2>
+
+      <div ref={printRef} className="print-area">
+        <div style={{
+          width: '340px', maxWidth: '100%', margin: '0 auto', borderRadius: '16px', overflow: 'hidden',
+          background: 'linear-gradient(135deg, #312e81, #1e40af, #0e7490)', color: 'white',
+          fontFamily: 'sans-serif', boxShadow: '0 20px 40px rgba(0,0,0,0.3)'
+        }}>
+          {/* Front */}
+          <div style={{ padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <img src={LOGO_URL} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain', borderRadius: '50%', background: 'rgba(255,255,255,0.15)', padding: '2px' }} />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 800, lineHeight: 1.2 }}>SMAN 10 Pinrang</div>
+                  <div style={{ fontSize: '8px', opacity: 0.7 }}>Kartu Anggota Perpustakaan</div>
+                </div>
+              </div>
+              <div style={{ padding: '4px', background: 'white', borderRadius: '8px' }}>
+                <QR text={`ELIB:${user.id}`} size={60} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div style={{
+                width: '56px', height: '56px', borderRadius: '12px', overflow: 'hidden',
+                background: 'rgba(255,255,255,0.2)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center'
+              }}>
+                {user.photo
+                  ? <img src={user.photo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <span style={{ fontSize: '28px' }}>👤</span>}
+              </div>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: 700 }}>{user.name}</div>
+                <div style={{ fontSize: '11px', opacity: 0.8 }}>ID: {user.id}</div>
+                <div style={{ fontSize: '10px', opacity: 0.6 }}>{user.job || '-'}</div>
+              </div>
+            </div>
+            <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '9px', opacity: 0.6 }}>
+              <span>Terdaftar: {formatDate(user.createdAt)}</span>
+              <span style={{ padding: '2px 8px', borderRadius: '99px', background: user.active ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)', color: user.active ? '#86efac' : '#fca5a5' }}>
+                {user.active ? 'AKTIF' : 'NONAKTIF'}
+              </span>
+            </div>
+            <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.15)', textAlign: 'center', fontSize: '7px', opacity: 0.5 }}>
+              Perpustakaan SMAN 10 Pinrang — Dikembangkan oleh Murdani © 2025
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button onClick={handlePrint} className="btn-primary w-full flex items-center justify-center gap-2">
+        <Icon d={Icons.print} /> Cetak Kartu
+      </button>
+    </div>
+  );
+}
+
+// ==================== VISITOR CHECK-IN ====================
+function VisitorCheckin({ user }: { user: User }) {
+  const [purpose, setPurpose] = useState('');
+  const [done, setDone] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [locationVerified, setLocationVerified] = useState(false);
+  const [tab, setTab] = useState<'scan' | 'manual'>('scan');
+
+  const handleScanResult = (text: string) => {
+    setShowScanner(false);
+    if (text === 'ELIB-CHECKIN-PERPUSTAKAAN') {
+      setLocationVerified(true);
+    } else {
+      alert('QR Code tidak valid. Pastikan Anda scan QR yang ada di perpustakaan.');
+    }
+  };
+
+  const doCheckin = () => {
+    if (!purpose) return;
+    addVisit({
+      id: generateId('VIS'),
+      userId: user.id,
+      userName: user.name,
+      purpose,
+      timestamp: new Date().toISOString(),
+    });
+    setDone(true);
+    setLocationVerified(false);
+  };
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.checkin} /> Check-in Kunjungan</h2>
+
+      {done ? (
+        <div className="card text-center py-8 space-y-3">
+          <div className="text-5xl">✅</div>
+          <div className="text-lg font-bold text-white">Check-in Berhasil!</div>
+          <div className="text-sm text-white/50">{purpose}</div>
+          <div className="text-xs text-white/30">{formatDateTime(new Date().toISOString())}</div>
+          <button onClick={() => { setDone(false); setPurpose(''); }} className="btn-glass mt-4">Check-in Lagi</button>
+        </div>
+      ) : (
+        <>
+          {/* Tab Switcher */}
+          <div className="flex gap-2">
+            <button onClick={() => setTab('scan')} className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-all ${tab === 'scan' ? 'bg-indigo-600 text-white' : 'glass text-white/40'}`}>
+              📷 Scan QR Lokasi
+            </button>
+            <button onClick={() => setTab('manual')} className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-all ${tab === 'manual' ? 'bg-indigo-600 text-white' : 'glass text-white/40'}`}>
+              ✏️ Check-in Manual
+            </button>
+          </div>
+
+          {tab === 'scan' ? (
+            <>
+              {/* Scan QR Lokasi */}
+              {!locationVerified ? (
+                <div className="space-y-4">
+                  <div className="card text-center py-6 space-y-3">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center text-3xl">📷</div>
+                    <div className="text-sm font-semibold text-white">Scan QR di Perpustakaan</div>
+                    <div className="text-xs text-white/40 leading-relaxed px-4">
+                      Scan QR Code yang tertempel di lokasi perpustakaan untuk memverifikasi kehadiran Anda
+                    </div>
+                    <button
+                      onClick={() => setShowScanner(true)}
+                      className="btn-primary px-8 py-3 text-base inline-flex items-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+                      </svg>
+                      Buka Kamera & Scan
+                    </button>
+                  </div>
+
+                  {/* Show own QR for pustakawan to scan */}
+                  <div className="card text-center py-4">
+                    <div className="text-xs text-white/40 mb-2">Atau tunjukkan QR ini ke Pustakawan</div>
+                    <div className="inline-block p-2 bg-white rounded-xl"><QR text={`ELIB:${user.id}`} size={120} /></div>
+                    <div className="text-[10px] text-white/30 mt-2 font-mono">{user.id}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Verified badge */}
+                  <div className="card text-center py-4 border-green-500/30 bg-green-500/5">
+                    <div className="text-2xl mb-1">📍✅</div>
+                    <div className="text-sm font-semibold text-green-400">Lokasi Terverifikasi!</div>
+                    <div className="text-[10px] text-white/40">Anda berada di perpustakaan</div>
+                  </div>
+
+                  {/* Purpose selection */}
+                  <div>
+                    <label className="text-xs text-white/40 mb-2 block">Pilih Tujuan Kunjungan</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {purposes.map(p => (
+                        <button key={p} onClick={() => setPurpose(p)}
+                          className={`text-xs p-3 rounded-xl border transition-all ${purpose === p ? 'border-green-500 bg-green-500/20 text-green-300' : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10'}`}>
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button onClick={doCheckin} disabled={!purpose} className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${purpose ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-500 hover:to-emerald-500 active:scale-[0.98]' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}>
+                    ✓ Check-in Sekarang
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            /* Manual Check-in */
+            <div className="space-y-4">
+              <div className="card text-center py-4">
+                <div className="text-xs text-white/40 mb-2">QR Keanggotaan Anda</div>
+                <div className="inline-block p-2 bg-white rounded-xl"><QR text={`ELIB:${user.id}`} size={120} /></div>
+                <div className="text-xs text-white/50 mt-2 font-mono">{user.id}</div>
+                <div className="text-[10px] text-white/30 mt-1">Tunjukkan ke pustakawan untuk di-scan</div>
+              </div>
+
+              <div>
+                <label className="text-xs text-white/40 mb-2 block">Pilih Tujuan Kunjungan</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {purposes.map(p => (
+                    <button key={p} onClick={() => setPurpose(p)}
+                      className={`text-xs p-3 rounded-xl border transition-all ${purpose === p ? 'border-indigo-500 bg-indigo-500/20 text-indigo-300' : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10'}`}>
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={doCheckin} disabled={!purpose} className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${purpose ? 'btn-primary' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}>
+                ✓ Check-in Manual
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Scanner Modal */}
+      {showScanner && (
+        <QRScanner
+          title="📷 Scan QR Lokasi Perpustakaan"
+          onResult={handleScanResult}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ==================== VISITOR HISTORY ====================
+function VisitorHistory({ userId }: { userId: string }) {
+  const visits = getVisits().filter(v => v.userId === userId);
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.history} /> Riwayat Kunjungan</h2>
+      {visits.length === 0 ? (
+        <div className="card text-center py-8 text-white/30 text-sm">Belum ada kunjungan</div>
+      ) : (
+        <div className="space-y-2">
+          {visits.map(v => (
+            <div key={v.id} className="card flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium text-white">{v.purpose}</div>
+                <div className="text-[10px] text-white/40">{formatDateTime(v.timestamp)}</div>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">✓</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== PROFILE PAGE ====================
+function ProfilePage({ user, setUser }: { user: User; setUser: (u: User) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(user);
+  const [photo, setPhoto] = useState(user.photo);
+  const [msg, setMsg] = useState('');
+
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setPhoto(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const save = () => {
+    const updated = { ...form, photo };
+    updateUser(updated);
+    setUser(updated);
+    setEditing(false);
+    setMsg('Profil berhasil diperbarui!');
+    setTimeout(() => setMsg(''), 3000);
+  };
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.user} /> Profil</h2>
+
+      {msg && <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-xs">{msg}</div>}
+
+      <div className="card text-center py-6">
+        <div className="w-20 h-20 mx-auto rounded-2xl bg-white/5 border border-white/10 overflow-hidden mb-3">
+          {(editing ? photo : user.photo) ? <img src={editing ? photo : user.photo} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-4xl text-white/20">👤</div>}
+        </div>
+        {editing && (
+          <label className="btn-glass text-xs cursor-pointer inline-block mb-3">
+            Ganti Foto <input type="file" accept="image/*" className="hidden" onChange={handlePhoto} />
+          </label>
+        )}
+        <div className="text-lg font-bold text-white">{user.name}</div>
+        <div className="text-xs text-indigo-400 font-mono">{user.id}</div>
+      </div>
+
+      {editing ? (
+        <div className="space-y-3">
+          <input className="input-field" placeholder="Nama" value={form.name} onChange={e => set('name', e.target.value)} />
+          <input className="input-field" placeholder="No. HP" value={form.phone} onChange={e => set('phone', e.target.value)} />
+          <input className="input-field" placeholder="Alamat" value={form.address} onChange={e => set('address', e.target.value)} />
+          <input className="input-field" placeholder="Pekerjaan" value={form.job} onChange={e => set('job', e.target.value)} />
+          <div className="flex gap-3">
+            <button onClick={save} className="btn-primary flex-1">Simpan</button>
+            <button onClick={() => { setEditing(false); setForm(user); setPhoto(user.photo); }} className="btn-glass flex-1">Batal</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-2">
+            {[
+              ['Email', user.email],
+              ['No. HP', user.phone],
+              ['Alamat', user.address || '-'],
+              ['Gender', user.gender === 'L' ? 'Laki-laki' : 'Perempuan'],
+              ['Tgl Lahir', formatDate(user.birthDate)],
+              ['Pekerjaan', user.job || '-'],
+            ].map(([l, v]) => (
+              <div key={l} className="card flex justify-between items-center">
+                <span className="text-xs text-white/40">{l}</span>
+                <span className="text-xs text-white font-medium">{v}</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => setEditing(true)} className="btn-primary w-full flex items-center justify-center gap-2">
+            <Icon d={Icons.edit} /> Edit Profil
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ==================== PUSTAKAWAN PANEL ====================
+function PustakaPanel({ user, page, setPage }: { user: User; page: string; setPage: (p: string) => void }) {
+  if (page === 'p-checkin') return <StaffCheckin />;
+  if (page === 'p-members') return <MemberList />;
+  if (page === 'p-history') return <FullHistory canDelete={false} />;
+  if (page === 'p-stats') return <StatsPage />;
+
+  const allVisits = getVisits();
+  const todayV = getTodayVisits();
+  const members = getUsers().filter(u => u.role === 'pengunjung');
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <div>
+        <h2 className="text-lg font-bold text-white">Dashboard Pustakawan</h2>
+        <p className="text-white/40 text-xs">Halo, {user.name} — SMAN 10 Pinrang</p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Anggota', val: members.length, color: 'from-indigo-500 to-blue-500' },
+          { label: 'Hari Ini', val: todayV.length, color: 'from-green-500 to-emerald-500' },
+          { label: 'Total', val: allVisits.length, color: 'from-amber-500 to-orange-500' },
+        ].map(s => (
+          <div key={s.label} className="card text-center">
+            <div className={`text-2xl font-bold bg-gradient-to-r ${s.color} bg-clip-text text-transparent`}>{s.val}</div>
+            <div className="text-[10px] text-white/40 mt-1">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button onClick={() => setPage('p-checkin')} className="card flex flex-col items-center gap-2 py-5 hover:bg-white/10 transition active:scale-95">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
+            <Icon d={Icons.checkin} cls="text-white" />
+          </div>
+          <span className="text-xs font-medium text-white/70">Check-in Tamu</span>
+        </button>
+        <button onClick={() => setPage('p-members')} className="card flex flex-col items-center gap-2 py-5 hover:bg-white/10 transition active:scale-95">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center">
+            <Icon d={Icons.users} cls="text-white" />
+          </div>
+          <span className="text-xs font-medium text-white/70">Daftar Anggota</span>
+        </button>
+      </div>
+
+      {/* Tombol Scan QR besar untuk pustakawan */}
+      <button onClick={() => setPage('p-checkin')} className="w-full py-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 active:scale-[0.98] transition-all flex items-center justify-center gap-3 shadow-lg shadow-indigo-500/20">
+        <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+        </svg>
+        <span className="text-white font-bold text-sm">📷 Scan QR Anggota</span>
+      </button>
+
+      {todayV.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold text-white/60 mb-2">Kunjungan Hari Ini</h3>
+          <div className="space-y-2">
+            {todayV.slice(0, 5).map(v => (
+              <div key={v.id} className="card flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-medium text-white">{v.userName}</div>
+                  <div className="text-[10px] text-white/40">{v.purpose} • {formatDateTime(v.timestamp)}</div>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/20 text-green-400">✓</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== STAFF CHECK-IN ====================
+function StaffCheckin() {
+  const [memberId, setMemberId] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [showQR, setShowQR] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [scannedUser, setScannedUser] = useState<User | null>(null);
+
+  const members = getUsers().filter(u => u.role === 'pengunjung' && u.active);
+
+  const handleScanResult = (text: string) => {
+    setShowScanner(false);
+    // QR format: ELIB:LIB-XXXX-XXXX
+    const id = text.startsWith('ELIB:') ? text.replace('ELIB:', '') : text;
+    const user = getUsers().find(u => u.id === id);
+    if (user) {
+      setMemberId(user.id);
+      setScannedUser(user);
+      setResult(null);
+    } else {
+      setMemberId(id);
+      setScannedUser(null);
+      setResult({ ok: false, msg: `ID "${id}" tidak ditemukan. Pastikan QR code valid.` });
+    }
+  };
+
+  const doCheckin = () => {
+    if (!memberId || !purpose) return setResult({ ok: false, msg: 'Pilih anggota dan tujuan kunjungan' });
+    const user = getUsers().find(u => u.id === memberId);
+    if (!user) return setResult({ ok: false, msg: 'Anggota tidak ditemukan' });
+    if (!user.active) return setResult({ ok: false, msg: 'Akun anggota tidak aktif' });
+
+    addVisit({
+      id: generateId('VIS'),
+      userId: user.id,
+      userName: user.name,
+      purpose,
+      timestamp: new Date().toISOString(),
+    });
+    setResult({ ok: true, msg: `✅ ${user.name} berhasil check-in — ${purpose}` });
+    setMemberId('');
+    setPurpose('');
+    setScannedUser(null);
+  };
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.checkin} /> Check-in Pengunjung</h2>
+
+      {/* === SCAN QR BUTTON (PROMINENT) === */}
+      <button
+        onClick={() => setShowScanner(true)}
+        className="w-full py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 active:scale-[0.98] transition-all flex items-center justify-center gap-3 shadow-lg shadow-indigo-500/20"
+      >
+        <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+          <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+          </svg>
+        </div>
+        <div className="text-left">
+          <div className="text-white font-bold text-sm">📷 Scan QR Anggota</div>
+          <div className="text-white/60 text-[10px]">Buka kamera untuk scan kartu pengunjung</div>
+        </div>
+      </button>
+
+      {result && (
+        <div className={`p-3 rounded-xl text-xs border ${result.ok ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+          {result.msg}
+        </div>
+      )}
+
+      {/* Scanned user info */}
+      {scannedUser && (
+        <div className="card flex items-center gap-3 border-indigo-500/30 bg-indigo-500/10">
+          <div className="w-12 h-12 rounded-xl bg-white/10 overflow-hidden flex-shrink-0 flex items-center justify-center">
+            {scannedUser.photo ? <img src={scannedUser.photo} className="w-full h-full object-cover" /> : <span className="text-xl">👤</span>}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-white truncate">{scannedUser.name}</div>
+            <div className="text-[10px] text-indigo-300 font-mono">{scannedUser.id}</div>
+            <div className="text-[10px] text-white/40">{scannedUser.phone} • {scannedUser.job || '-'}</div>
+          </div>
+          <span className="text-lg">✅</span>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {/* Manual select / input if not scanned */}
+        {!scannedUser && (
+          <>
+            <div>
+              <label className="text-xs text-white/40 mb-1 block">Atau pilih anggota manual</label>
+              <select className="input-field" value={memberId} onChange={e => { setMemberId(e.target.value); setScannedUser(null); }}>
+                <option value="">-- Pilih anggota --</option>
+                {members.map(m => <option key={m.id} value={m.id}>{m.name} ({m.id})</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-white/40 mb-1 block">Atau ketik ID</label>
+              <input className="input-field font-mono" placeholder="Contoh: LIB-2501-1234" value={memberId} onChange={e => { setMemberId(e.target.value); setScannedUser(null); }} />
+            </div>
+          </>
+        )}
+
+        <div>
+          <label className="text-xs text-white/40 mb-2 block">Tujuan Kunjungan</label>
+          <div className="grid grid-cols-2 gap-2">
+            {purposes.map(p => (
+              <button key={p} onClick={() => setPurpose(p)}
+                className={`text-xs p-3 rounded-xl border transition-all ${purpose === p ? 'border-indigo-500 bg-indigo-500/20 text-indigo-300' : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10'}`}>
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button onClick={doCheckin} disabled={!memberId || !purpose} className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${memberId && purpose ? 'btn-primary' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}>
+          ✓ Check-in Sekarang
+        </button>
+
+        {scannedUser && (
+          <button onClick={() => { setScannedUser(null); setMemberId(''); setResult(null); }} className="btn-glass w-full text-xs">
+            Scan Anggota Lain
+          </button>
+        )}
+      </div>
+
+      <div className="border-t border-white/10 pt-4">
+        <button onClick={() => setShowQR(!showQR)} className="btn-glass w-full flex items-center justify-center gap-2">
+          <Icon d={Icons.qr} /> {showQR ? 'Tutup' : 'Tampilkan'} QR Lokasi Perpustakaan
+        </button>
+        {showQR && (
+          <div className="card text-center mt-3 py-6">
+            <div className="text-xs text-white/40 mb-1 font-semibold">QR Check-in Lokasi</div>
+            <div className="text-[10px] text-white/30 mb-3">Cetak & tempel QR ini di pintu masuk perpustakaan</div>
+            <div className="inline-block p-3 bg-white rounded-2xl"><QR text="ELIB-CHECKIN-PERPUSTAKAAN" size={200} /></div>
+            <div className="text-[10px] text-white/30 mt-3">Pengunjung scan QR ini untuk check-in mandiri dari HP mereka</div>
+          </div>
+        )}
+      </div>
+
+      {/* Scanner Modal */}
+      {showScanner && (
+        <QRScanner
+          title="📷 Scan QR Kartu Anggota"
+          onResult={handleScanResult}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ==================== MEMBER LIST ====================
+function MemberList() {
+  const [search, setSearch] = useState('');
+  const members = getUsers().filter(u => u.role === 'pengunjung');
+  const filtered = members.filter(m => m.name.toLowerCase().includes(search.toLowerCase()) || m.id.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.users} /> Anggota ({members.length})</h2>
+      <div className="relative">
+        <Icon d={Icons.search} cls="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+        <input className="input-field pl-10" placeholder="Cari nama atau ID..." value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      {filtered.length === 0 ? (
+        <div className="card text-center py-8 text-white/30 text-sm">Tidak ada anggota</div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(m => (
+            <div key={m.id} className="card flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/5 overflow-hidden flex-shrink-0 flex items-center justify-center">
+                {m.photo ? <img src={m.photo} className="w-full h-full object-cover" /> : <span className="text-lg text-white/20">👤</span>}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-white truncate">{m.name}</div>
+                <div className="text-[10px] text-white/40">{m.id} • {m.phone}</div>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${m.active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                {m.active ? 'Aktif' : 'Off'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== FULL HISTORY ====================
+function FullHistory({ canDelete }: { canDelete: boolean }) {
+  const [visits, setVisits] = useState(getVisits());
+  const [search, setSearch] = useState('');
+  const [dateF, setDateF] = useState('');
+
+  const filtered = visits.filter(v => {
+    const matchSearch = v.userName.toLowerCase().includes(search.toLowerCase()) || v.userId.toLowerCase().includes(search.toLowerCase());
+    const matchDate = !dateF || v.timestamp.startsWith(dateF);
+    return matchSearch && matchDate;
+  });
+
+  const handleDelete = (id: string) => {
+    if (!confirm('Hapus kunjungan ini?')) return;
+    delVisit(id);
+    setVisits(getVisits());
+  };
+
+  const exportCSV = () => {
+    const header = 'ID,User ID,Nama,Tujuan,Waktu\n';
+    const rows = filtered.map(v => `${v.id},${v.userId},"${v.userName}","${v.purpose}",${v.timestamp}`).join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `kunjungan_${todayStr()}.csv`;
+    a.click();
+  };
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.history} /> Riwayat</h2>
+        <button onClick={exportCSV} className="btn-glass text-xs flex items-center gap-1"><Icon d={Icons.download} /> CSV</button>
+      </div>
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Icon d={Icons.search} cls="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+          <input className="input-field pl-10" placeholder="Cari..." value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <input type="date" className="input-field w-auto" value={dateF} onChange={e => setDateF(e.target.value)} />
+      </div>
+      <div className="text-xs text-white/40">{filtered.length} kunjungan</div>
+      {filtered.length === 0 ? (
+        <div className="card text-center py-8 text-white/30 text-sm">Tidak ada data</div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(v => (
+            <div key={v.id} className="card flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-white truncate">{v.userName}</div>
+                <div className="text-[10px] text-white/40">{v.purpose} • {formatDateTime(v.timestamp)}</div>
+              </div>
+              {canDelete && (
+                <button onClick={() => handleDelete(v.id)} className="p-1.5 rounded-lg hover:bg-red-500/20 text-white/20 hover:text-red-400 transition flex-shrink-0">
+                  <Icon d={Icons.trash} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== STATS PAGE ====================
+function StatsPage() {
+  const allVisits = getVisits();
+  const members = getUsers().filter(u => u.role === 'pengunjung');
+  const todayV = getTodayVisits();
+
+  // Last 7 days
+  const last7 = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    const ds = d.toISOString().split('T')[0];
+    return { day: d.toLocaleDateString('id-ID', { weekday: 'short' }), count: allVisits.filter(v => v.timestamp.startsWith(ds)).length };
+  });
+  const maxCount = Math.max(...last7.map(d => d.count), 1);
+
+  // Purpose breakdown
+  const purposeCount: Record<string, number> = {};
+  allVisits.forEach(v => { purposeCount[v.purpose] = (purposeCount[v.purpose] || 0) + 1; });
+  const purposeEntries = Object.entries(purposeCount).sort((a, b) => b[1] - a[1]);
+  const totalPurpose = allVisits.length || 1;
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.chart} /> Statistik</h2>
+
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Anggota', val: members.length },
+          { label: 'Hari Ini', val: todayV.length },
+          { label: 'Total', val: allVisits.length },
+        ].map(s => (
+          <div key={s.label} className="card text-center">
+            <div className="text-xl font-bold text-indigo-400">{s.val}</div>
+            <div className="text-[10px] text-white/40">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 7-day chart */}
+      <div className="card">
+        <h3 className="text-xs font-semibold text-white/60 mb-3">Kunjungan 7 Hari Terakhir</h3>
+        <div className="flex items-end gap-1 h-28">
+          {last7.map((d, i) => (
+            <div key={i} className="flex-1 flex flex-col items-center gap-1">
+              <span className="text-[9px] text-white/50">{d.count}</span>
+              <div className="w-full rounded-t-md bg-gradient-to-t from-indigo-600 to-blue-500 transition-all" style={{ height: `${(d.count / maxCount) * 100}%`, minHeight: d.count > 0 ? '4px' : '2px' }} />
+              <span className="text-[9px] text-white/30">{d.day}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Purpose */}
+      <div className="card">
+        <h3 className="text-xs font-semibold text-white/60 mb-3">Tujuan Kunjungan</h3>
+        <div className="space-y-2">
+          {purposeEntries.map(([p, c]) => (
+            <div key={p}>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-white/70">{p}</span>
+                <span className="text-white/40">{c}</span>
+              </div>
+              <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-indigo-500 to-blue-500 rounded-full transition-all" style={{ width: `${(c / totalPurpose) * 100}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== ADMIN PANEL ====================
+function AdminPanel({ user, page, setPage }: { user: User; page: string; setPage: (p: string) => void }) {
+  if (page === 'a-users') return <UserManagement />;
+  if (page === 'a-checkin') return <StaffCheckin />;
+  if (page === 'a-history') return <FullHistory canDelete={true} />;
+  if (page === 'a-settings') return <SettingsPage />;
+
+  const allUsers = getUsers();
+  const allVisits = getVisits();
+  const todayV = getTodayVisits();
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <div>
+        <h2 className="text-lg font-bold text-white">Admin Panel</h2>
+        <p className="text-white/40 text-xs">Halo, {user.name} — SMAN 10 Pinrang</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { label: 'Pengunjung', val: allUsers.filter(u => u.role === 'pengunjung').length, color: 'from-indigo-500 to-blue-500' },
+          { label: 'Pustakawan', val: allUsers.filter(u => u.role === 'pustakawan').length, color: 'from-purple-500 to-pink-500' },
+          { label: 'Hari Ini', val: todayV.length, color: 'from-green-500 to-emerald-500' },
+          { label: 'Total Visit', val: allVisits.length, color: 'from-amber-500 to-orange-500' },
+        ].map(s => (
+          <div key={s.label} className="card text-center">
+            <div className={`text-2xl font-bold bg-gradient-to-r ${s.color} bg-clip-text text-transparent`}>{s.val}</div>
+            <div className="text-[10px] text-white/40 mt-1">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { id: 'a-users', icon: Icons.users, label: 'Kelola Akun', color: 'from-indigo-500 to-blue-500' },
+          { id: 'a-checkin', icon: Icons.checkin, label: 'Check-in', color: 'from-green-500 to-emerald-500' },
+          { id: 'a-history', icon: Icons.history, label: 'Riwayat', color: 'from-amber-500 to-orange-500' },
+          { id: 'a-settings', icon: Icons.settings, label: 'Pengaturan', color: 'from-purple-500 to-pink-500' },
+        ].map(item => (
+          <button key={item.id} onClick={() => setPage(item.id)} className="card flex flex-col items-center gap-2 py-5 hover:bg-white/10 transition active:scale-95">
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${item.color} flex items-center justify-center`}>
+              <Icon d={item.icon} cls="text-white" />
+            </div>
+            <span className="text-xs font-medium text-white/70">{item.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ==================== USER MANAGEMENT ====================
+function UserManagement() {
+  const [users, setUsers] = useState(getUsers());
+  const [search, setSearch] = useState('');
+  const [roleF, setRoleF] = useState<string>('');
+  const [showAdd, setShowAdd] = useState(false);
+  const [editU, setEditU] = useState<User | null>(null);
+  const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', gender: 'L' as 'L' | 'P', birthDate: '', job: '', role: 'pengunjung' as Role, password: '' });
+  const [msg, setMsg] = useState('');
+
+  const reload = () => setUsers(getUsers());
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const filtered = users.filter(u => {
+    const matchSearch = u.name.toLowerCase().includes(search.toLowerCase()) || u.id.toLowerCase().includes(search.toLowerCase());
+    const matchRole = !roleF || u.role === roleF;
+    return matchSearch && matchRole;
+  });
+
+  const handleAdd = () => {
+    if (!form.name || !form.email || !form.password) { setMsg('Nama, email, password wajib!'); return; }
+    if (users.find(u => u.email === form.email)) { setMsg('Email sudah terdaftar!'); return; }
+    const prefix = form.role === 'admin' ? 'ADM' : form.role === 'pustakawan' ? 'PTK' : 'LIB';
+    addUser({
+      id: generateId(prefix),
+      ...form,
+      photo: '',
+      active: true,
+      createdAt: new Date().toISOString(),
+    });
+    reload();
+    setShowAdd(false);
+    setForm({ name: '', email: '', phone: '', address: '', gender: 'L', birthDate: '', job: '', role: 'pengunjung', password: '' });
+    setMsg('');
+  };
+
+  const handleEdit = () => {
+    if (!editU) return;
+    const updated: User = {
+      ...editU,
+      name: form.name || editU.name,
+      email: form.email || editU.email,
+      phone: form.phone,
+      address: form.address,
+      job: form.job,
+      role: form.role,
+      ...(form.password ? { password: form.password } : {}),
+    };
+    updateUser(updated);
+    reload();
+    setEditU(null);
+    setMsg('');
+  };
+
+  const toggleActive = (u: User) => {
+    updateUser({ ...u, active: !u.active });
+    reload();
+  };
+
+  const handleDelete = (u: User) => {
+    if (!confirm(`Hapus akun ${u.name}?`)) return;
+    delUser(u.id);
+    reload();
+  };
+
+  const openEdit = (u: User) => {
+    setEditU(u);
+    setForm({ name: u.name, email: u.email, phone: u.phone, address: u.address, gender: u.gender, birthDate: u.birthDate, job: u.job, role: u.role, password: '' });
+  };
+
+  const roleBadge = (r: Role) => {
+    const cls = r === 'admin' ? 'bg-red-500/20 text-red-400' : r === 'pustakawan' ? 'bg-purple-500/20 text-purple-400' : 'bg-indigo-500/20 text-indigo-400';
+    return <span className={`text-[10px] px-2 py-0.5 rounded-full capitalize ${cls}`}>{r}</span>;
+  };
+
+  const formModal = (title: string, onSubmit: () => void, onCancel: () => void) => (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onCancel}>
+      <div className="bg-slate-900 border border-white/10 rounded-t-2xl sm:rounded-2xl w-full max-w-sm max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0">
+          <h3 className="text-sm font-bold text-white">{title}</h3>
+          <button onClick={onCancel} className="p-1 hover:bg-white/10 rounded-lg"><Icon d={Icons.x} cls="text-white/40" /></button>
+        </div>
+        <div className="p-4 space-y-3 scrollable flex-1">
+          {msg && <div className="p-2 rounded-lg bg-red-500/10 text-red-400 text-xs">{msg}</div>}
+          <input className="input-field" placeholder="Nama *" value={form.name} onChange={e => set('name', e.target.value)} />
+          <input className="input-field" placeholder="Email *" value={form.email} onChange={e => set('email', e.target.value)} />
+          <input className="input-field" placeholder="No. HP" value={form.phone} onChange={e => set('phone', e.target.value)} />
+          <input className="input-field" placeholder="Alamat" value={form.address} onChange={e => set('address', e.target.value)} />
+          <input className="input-field" placeholder="Pekerjaan" value={form.job} onChange={e => set('job', e.target.value)} />
+          <select className="input-field" value={form.role} onChange={e => set('role', e.target.value)}>
+            <option value="pengunjung">Pengunjung</option>
+            <option value="pustakawan">Pustakawan</option>
+            <option value="admin">Admin</option>
+          </select>
+          <input className="input-field" type="password" placeholder={editU ? 'Password baru (kosongkan jika tidak diubah)' : 'Password *'} value={form.password} onChange={e => set('password', e.target.value)} />
+        </div>
+        <div className="p-4 border-t border-white/10 flex-shrink-0">
+          <button onClick={onSubmit} className="btn-primary w-full">{editU ? 'Simpan Perubahan' : 'Tambah Akun'}</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.users} /> Kelola Akun</h2>
+        <button onClick={() => { setShowAdd(true); setMsg(''); }} className="btn-primary text-xs flex items-center gap-1"><Icon d={Icons.plus} /> Tambah</button>
+      </div>
+
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Icon d={Icons.search} cls="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+          <input className="input-field pl-10" placeholder="Cari..." value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <select className="input-field w-auto" value={roleF} onChange={e => setRoleF(e.target.value)}>
+          <option value="">Semua</option>
+          <option value="pengunjung">Pengunjung</option>
+          <option value="pustakawan">Pustakawan</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+
+      <div className="text-xs text-white/40">{filtered.length} akun</div>
+
+      <div className="space-y-2">
+        {filtered.map(u => (
+          <div key={u.id} className="card">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/5 overflow-hidden flex-shrink-0 flex items-center justify-center">
+                {u.photo ? <img src={u.photo} className="w-full h-full object-cover" /> : <span className="text-lg text-white/20">👤</span>}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-white truncate">{u.name}</div>
+                <div className="text-[10px] text-white/40">{u.id} • {u.email}</div>
+              </div>
+              {roleBadge(u.role)}
+            </div>
+            <div className="flex gap-2 mt-3 pt-3 border-t border-white/5">
+              <button onClick={() => toggleActive(u)} className={`flex-1 text-[10px] py-1.5 rounded-lg border transition ${u.active ? 'border-green-500/30 text-green-400 hover:bg-green-500/10' : 'border-red-500/30 text-red-400 hover:bg-red-500/10'}`}>
+                {u.active ? '✓ Aktif' : '✗ Nonaktif'}
+              </button>
+              <button onClick={() => { openEdit(u); setMsg(''); }} className="flex-1 text-[10px] py-1.5 rounded-lg border border-white/10 text-white/50 hover:bg-white/10 transition">Edit</button>
+              <button onClick={() => handleDelete(u)} className="text-[10px] py-1.5 px-3 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 transition">Hapus</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showAdd && formModal('Tambah Akun Baru', handleAdd, () => { setShowAdd(false); setMsg(''); })}
+      {editU && formModal(`Edit: ${editU.name}`, handleEdit, () => { setEditU(null); setMsg(''); })}
+    </div>
+  );
+}
+
+// ==================== SETTINGS PAGE ====================
+function SettingsPage() {
+  const [tab, setTab] = useState<'database' | 'stats' | 'gas'>('database');
+
+  return (
+    <div className="h-full scrollable p-4 space-y-4 animate-fade">
+      <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icon d={Icons.settings} /> Pengaturan</h2>
+
+      <div className="flex gap-1.5">
+        <button onClick={() => setTab('database')} className={`flex-1 text-[10px] sm:text-xs py-2 rounded-xl transition font-semibold ${tab === 'database' ? 'bg-indigo-600 text-white' : 'glass text-white/50'}`}>📊 Database</button>
+        <button onClick={() => setTab('stats')} className={`flex-1 text-[10px] sm:text-xs py-2 rounded-xl transition font-semibold ${tab === 'stats' ? 'bg-indigo-600 text-white' : 'glass text-white/50'}`}>📈 Statistik</button>
+        <button onClick={() => setTab('gas')} className={`flex-1 text-[10px] sm:text-xs py-2 rounded-xl transition font-semibold ${tab === 'gas' ? 'bg-indigo-600 text-white' : 'glass text-white/50'}`}>⚙️ Code.gs</button>
+      </div>
+
+      {tab === 'database' ? <DatabaseSetup /> : tab === 'stats' ? <StatsPage /> : <GASSetup />}
+    </div>
+  );
+}
+
+// ==================== DATABASE SETUP ====================
+function DatabaseSetup() {
+  const [gasUrl, setGasUrlState] = useState(getGasUrl());
+  const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const saveUrl = () => {
+    setGasUrl(gasUrl.trim());
+    setStatus({ ok: true, msg: '✅ URL tersimpan!' });
+    setTimeout(() => setStatus(null), 3000);
+  };
+
+  const handleTest = async () => {
+    setLoading(true);
+    setStatus(null);
+    setGasUrl(gasUrl.trim());
+    const result = await testConnection();
+    setStatus(result);
+    setLoading(false);
+  };
+
+  const handleSyncDown = async () => {
+    setLoading(true);
+    setSyncStatus(null);
+    const result = await syncFromServer();
+    setSyncStatus({ ok: result.ok, msg: result.ok ? `✅ ${result.msg} (${result.users} user, ${result.visits} kunjungan)` : result.msg });
+    setLoading(false);
+  };
+
+  const handleSyncUp = async () => {
+    if (!confirm('Upload semua data lokal ke Spreadsheet? Data di Spreadsheet akan ditimpa.')) return;
+    setLoading(true);
+    setSyncStatus(null);
+    const result = await syncToServer();
+    setSyncStatus(result);
+    setLoading(false);
+  };
+
+  const localUsers = getUsers();
+  const localVisits = getVisits();
+  const isConfigured = gasUrl.trim().length > 0;
+  const currentSheetId = getSheetId();
+
+  return (
+    <div className="space-y-4">
+      {/* Status Koneksi */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-3">
+          <div className={`w-3 h-3 rounded-full ${isConfigured ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+          <div>
+            <div className="text-sm font-bold text-white">Status Database</div>
+            <div className="text-[10px] text-white/40">{isConfigured ? 'Google Spreadsheet terhubung' : 'Belum dikonfigurasi — data tersimpan di browser'}</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="bg-white/5 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-indigo-400">{localUsers.length}</div>
+            <div className="text-[10px] text-white/40">User</div>
+          </div>
+          <div className="bg-white/5 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-blue-400">{localVisits.length}</div>
+            <div className="text-[10px] text-white/40">Kunjungan</div>
+          </div>
+          <div className="bg-white/5 rounded-xl p-3 text-center">
+            <div className="text-lg font-bold text-emerald-400">{currentSheetId ? '✓' : '✗'}</div>
+            <div className="text-[10px] text-white/40">Sheet ID</div>
+          </div>
+        </div>
+        {!currentSheetId && (
+          <div className="mt-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px]">
+            ⚠️ Spreadsheet ID belum diisi. Buka tab <strong>Code.gs</strong> untuk mengisi ID.
+          </div>
+        )}
+      </div>
+
+      {/* URL Web App */}
+      <div className="card space-y-3">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2">🔗 URL Web App (Google Apps Script)</h3>
+        <p className="text-[10px] text-white/40 leading-relaxed">
+          Setelah deploy Code.gs sebagai Web App, paste URL-nya di sini untuk menghubungkan.
+        </p>
+        <input
+          className="input-field font-mono text-xs"
+          placeholder="https://script.google.com/macros/s/AKfy.../exec"
+          value={gasUrl}
+          onChange={e => setGasUrlState(e.target.value)}
+        />
+
+        <div className="flex gap-2">
+          <button onClick={saveUrl} className="btn-primary flex-1 text-xs py-2.5">
+            💾 Simpan URL
+          </button>
+          <button
+            onClick={handleTest}
+            disabled={loading || !gasUrl.trim()}
+            className={`flex-1 text-xs py-2.5 rounded-xl font-semibold transition-all ${!loading && gasUrl.trim() ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}
+          >
+            {loading ? '⏳ Testing...' : '🔌 Test Koneksi'}
+          </button>
+        </div>
+
+        {status && (
+          <div className={`p-3 rounded-xl text-xs border ${status.ok ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+            {status.msg}
+          </div>
+        )}
+      </div>
+
+      {/* Sync */}
+      <div className="card space-y-3">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2">🔄 Sinkronisasi Data</h3>
+        <p className="text-[10px] text-white/40 leading-relaxed">
+          Sinkronkan data antara browser dan Google Spreadsheet.
+        </p>
+
+        <div className="grid grid-cols-1 gap-2">
+          <button
+            onClick={handleSyncDown}
+            disabled={loading || !isConfigured}
+            className={`w-full py-3 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-2 ${!loading && isConfigured ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}
+          >
+            {loading ? '⏳' : '⬇️'} Tarik Data dari Spreadsheet
+          </button>
+          <button
+            onClick={handleSyncUp}
+            disabled={loading || !isConfigured}
+            className={`w-full py-3 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-2 ${!loading && isConfigured ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}
+          >
+            {loading ? '⏳' : '⬆️'} Upload Data ke Spreadsheet
+          </button>
+        </div>
+
+        {syncStatus && (
+          <div className={`p-3 rounded-xl text-xs border ${syncStatus.ok ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+            {syncStatus.msg}
+          </div>
+        )}
+      </div>
+
+      {/* Alur Penggunaan */}
+      <div className="card border-indigo-500/20 bg-indigo-500/5">
+        <h3 className="text-sm font-bold text-white mb-3">📌 Alur Setup Database</h3>
+        <div className="space-y-2">
+          {[
+            { n: '1', t: 'Isi Spreadsheet ID', d: 'Buka tab Code.gs → Masukkan ID Spreadsheet Anda', done: !!currentSheetId },
+            { n: '2', t: 'Copy & paste Code.gs', d: 'Salin kode dari tab Code.gs → Paste ke Apps Script', done: false },
+            { n: '3', t: 'Deploy sebagai Web App', d: 'Deploy → New Deployment → Web App → Anyone', done: false },
+            { n: '4', t: 'Paste URL di atas', d: 'Copy URL hasil deploy → Paste di kolom URL Web App', done: isConfigured },
+            { n: '5', t: 'Test & Sync', d: 'Klik Test Koneksi → Upload/Tarik data', done: false },
+          ].map(s => (
+            <div key={s.n} className="flex items-start gap-2">
+              <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-[9px] font-bold ${s.done ? 'bg-green-600 text-white' : 'bg-white/10 text-white/40'}`}>
+                {s.done ? '✓' : s.n}
+              </div>
+              <div className="flex-1">
+                <div className="text-[11px] font-semibold text-white">{s.t}</div>
+                <div className="text-[9px] text-white/40">{s.d}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Struktur Sheet */}
+      <div className="card">
+        <h3 className="text-sm font-bold text-white mb-2">📋 Struktur Sheet (Otomatis Dibuat)</h3>
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs font-semibold text-indigo-400 mb-1">Sheet: "Users"</div>
+            <div className="bg-black/30 rounded-lg p-2 overflow-x-auto">
+              <div className="flex gap-1 text-[8px] font-mono text-white/50 whitespace-nowrap">
+                {['id','name','email','phone','address','gender','birthDate','job','role','password','photo','active','createdAt'].map(h => (
+                  <span key={h} className="px-1.5 py-0.5 bg-indigo-500/20 rounded text-indigo-300">{h}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-blue-400 mb-1">Sheet: "Visits"</div>
+            <div className="bg-black/30 rounded-lg p-2 overflow-x-auto">
+              <div className="flex gap-1 text-[8px] font-mono text-white/50 whitespace-nowrap">
+                {['id','userId','userName','purpose','timestamp'].map(h => (
+                  <span key={h} className="px-1.5 py-0.5 bg-blue-500/20 rounded text-blue-300">{h}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== GAS SETUP ====================
+function GASSetup() {
+  const [sheetId, setSheetIdLocal] = useState(getSheetId());
+  const [saved, setSaved] = useState(false);
+
+  const handleSaveId = () => {
+    setSheetId(sheetId.trim());
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+  };
+
+  const gasCode = `// ============================================================
+// Code.gs — Google Apps Script untuk e-Library
+// Perpustakaan SMAN 10 Pinrang
+// Dikembangkan oleh Murdani © 2025
+// ============================================================
+
+// ✅ SPREADSHEET ID ANDA (sudah diisi otomatis)
+const SPREADSHEET_ID = '${sheetId.trim() || 'PASTE_SPREADSHEET_ID_ANDA_DI_SINI'}';
+
+// ==================== REQUEST HANDLER ====================
+function doGet(e) {
+  return handleRequest(e);
+}
+
+function doPost(e) {
+  return handleRequest(e);
+}
+
+function handleRequest(e) {
+  const action = e.parameter.action;
+  let result;
+
+  try {
+    switch(action) {
+      case 'ping':
+        result = { ok: true, msg: 'Connected to e-Library Database' };
+        break;
+      case 'getUsers':
+        result = getAllUsers();
+        break;
+      case 'getVisits':
+        result = getAllVisits();
+        break;
+      case 'addUser':
+        result = addUser(JSON.parse(e.parameter.data));
+        break;
+      case 'updateUser':
+        result = updateUser(JSON.parse(e.parameter.data));
+        break;
+      case 'deleteUser':
+        result = deleteUser(e.parameter.id);
+        break;
+      case 'addVisit':
+        result = addVisit(JSON.parse(e.parameter.data));
+        break;
+      case 'deleteVisit':
+        result = deleteVisit(e.parameter.id);
+        break;
+      case 'syncAll':
+        result = syncAll(
+          JSON.parse(e.parameter.users || '[]'),
+          JSON.parse(e.parameter.visits || '[]')
+        );
+        break;
+      default:
+        result = { error: 'Unknown action: ' + action };
+    }
+  } catch(err) {
+    result = { error: err.toString() };
+  }
+
+  return ContentService.createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ==================== SHEET HELPER ====================
+function getSheet(name) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    if (name === 'Users') {
+      sheet.appendRow([
+        'id', 'name', 'email', 'phone', 'address',
+        'gender', 'birthDate', 'job', 'role', 'password',
+        'photo', 'active', 'createdAt'
+      ]);
+      // Format header
+      sheet.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#4338ca').setFontColor('white');
+      sheet.setFrozenRows(1);
+      sheet.setColumnWidth(1, 140);  // id
+      sheet.setColumnWidth(2, 180);  // name
+      sheet.setColumnWidth(3, 200);  // email
+      sheet.setColumnWidth(10, 120); // password
+      sheet.setColumnWidth(11, 50);  // photo (hidden)
+    } else if (name === 'Visits') {
+      sheet.appendRow(['id', 'userId', 'userName', 'purpose', 'timestamp']);
+      sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#1d4ed8').setFontColor('white');
+      sheet.setFrozenRows(1);
+      sheet.setColumnWidth(1, 140);
+      sheet.setColumnWidth(2, 140);
+      sheet.setColumnWidth(3, 180);
+      sheet.setColumnWidth(4, 160);
+      sheet.setColumnWidth(5, 200);
+    }
+  }
+  return sheet;
+}
+
+// ==================== READ DATA ====================
+function getAllUsers() {
+  const sheet = getSheet('Users');
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+  const headers = data[0];
+  const users = [];
+  for (let i = 1; i < data.length; i++) {
+    const obj = {};
+    headers.forEach(function(h, j) {
+      if (h === 'active') {
+        obj[h] = data[i][j] === true || data[i][j] === 'true' || data[i][j] === 'TRUE';
+      } else {
+        obj[h] = String(data[i][j] || '');
+      }
+    });
+    if (obj['id']) users.push(obj);
+  }
+  return users;
+}
+
+function getAllVisits() {
+  const sheet = getSheet('Visits');
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+  const headers = data[0];
+  const visits = [];
+  for (let i = 1; i < data.length; i++) {
+    const obj = {};
+    headers.forEach(function(h, j) {
+      obj[h] = String(data[i][j] || '');
+    });
+    if (obj['id']) visits.push(obj);
+  }
+  return visits;
+}
+
+// ==================== WRITE DATA ====================
+function addUser(user) {
+  const sheet = getSheet('Users');
+  sheet.appendRow([
+    user.id || '', user.name || '', user.email || '',
+    user.phone || '', user.address || '', user.gender || '',
+    user.birthDate || '', user.job || '', user.role || '',
+    user.password || '', user.photo || '',
+    user.active === true || user.active === 'true' ? 'true' : 'false',
+    user.createdAt || new Date().toISOString()
+  ]);
+  return { ok: true, msg: 'User added: ' + user.name };
+}
+
+function updateUser(user) {
+  const sheet = getSheet('Users');
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(user.id)) {
+      sheet.getRange(i + 1, 1, 1, 13).setValues([[
+        user.id || '', user.name || '', user.email || '',
+        user.phone || '', user.address || '', user.gender || '',
+        user.birthDate || '', user.job || '', user.role || '',
+        user.password || '', user.photo || '',
+        user.active === true || user.active === 'true' ? 'true' : 'false',
+        user.createdAt || ''
+      ]]);
+      return { ok: true, msg: 'User updated: ' + user.name };
+    }
+  }
+  // If not found, add as new
+  return addUser(user);
+}
+
+function deleteUser(id) {
+  const sheet = getSheet('Users');
+  const data = sheet.getDataRange().getValues();
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][0]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      return { ok: true, msg: 'User deleted: ' + id };
+    }
+  }
+  return { ok: false, error: 'User not found: ' + id };
+}
+
+function addVisit(visit) {
+  const sheet = getSheet('Visits');
+  sheet.appendRow([
+    visit.id || '', visit.userId || '', visit.userName || '',
+    visit.purpose || '', visit.timestamp || new Date().toISOString()
+  ]);
+  return { ok: true, msg: 'Visit recorded: ' + visit.userName };
+}
+
+function deleteVisit(id) {
+  const sheet = getSheet('Visits');
+  const data = sheet.getDataRange().getValues();
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][0]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      return { ok: true, msg: 'Visit deleted: ' + id };
+    }
+  }
+  return { ok: false, error: 'Visit not found: ' + id };
+}
+
+// ==================== FULL SYNC ====================
+function syncAll(users, visits) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  // Clear and rewrite Users
+  let userSheet = ss.getSheetByName('Users');
+  if (userSheet) {
+    const lastRow = userSheet.getLastRow();
+    if (lastRow > 1) {
+      userSheet.getRange(2, 1, lastRow - 1, 13).clearContent();
+    }
+  } else {
+    userSheet = getSheet('Users');
+  }
+
+  users.forEach(function(user) {
+    userSheet.appendRow([
+      user.id || '', user.name || '', user.email || '',
+      user.phone || '', user.address || '', user.gender || '',
+      user.birthDate || '', user.job || '', user.role || '',
+      user.password || '', user.photo || '',
+      user.active === true || user.active === 'true' ? 'true' : 'false',
+      user.createdAt || ''
+    ]);
+  });
+
+  // Clear and rewrite Visits
+  let visitSheet = ss.getSheetByName('Visits');
+  if (visitSheet) {
+    const lastRow = visitSheet.getLastRow();
+    if (lastRow > 1) {
+      visitSheet.getRange(2, 1, lastRow - 1, 5).clearContent();
+    }
+  } else {
+    visitSheet = getSheet('Visits');
+  }
+
+  visits.forEach(function(visit) {
+    visitSheet.appendRow([
+      visit.id || '', visit.userId || '', visit.userName || '',
+      visit.purpose || '', visit.timestamp || ''
+    ]);
+  });
+
+  return {
+    ok: true,
+    msg: 'Synced ' + users.length + ' users and ' + visits.length + ' visits'
+  };
+}`;
+
+  const copyCode = useCallback(() => {
+    navigator.clipboard.writeText(gasCode).then(() => alert('✅ Kode Code.gs berhasil disalin ke clipboard!')).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = gasCode;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      alert('✅ Kode Code.gs berhasil disalin!');
+    });
+  }, [gasCode]);
+
+  return (
+    <div className="space-y-4">
+      {/* Spreadsheet ID Input */}
+      <div className="card border-indigo-500/30 bg-indigo-500/5">
+        <h3 className="text-sm font-bold text-white mb-1 flex items-center gap-2">📊 Spreadsheet ID</h3>
+        <p className="text-[10px] text-white/40 mb-3 leading-relaxed">
+          Masukkan Spreadsheet ID Anda. Kode Code.gs di bawah akan <strong className="text-indigo-400">otomatis terupdate</strong> dengan ID ini.
+        </p>
+        <div className="flex gap-2">
+          <input
+            className="input-field font-mono text-xs flex-1"
+            placeholder="Paste Spreadsheet ID di sini..."
+            value={sheetId}
+            onChange={e => setSheetIdLocal(e.target.value)}
+          />
+          <button onClick={handleSaveId} className="btn-primary text-xs px-4 flex-shrink-0">
+            {saved ? '✅' : '💾'}
+          </button>
+        </div>
+        <div className="text-[9px] text-white/30 mt-2 leading-relaxed">
+          💡 Cara mendapatkan ID: Buka Spreadsheet → Lihat URL di browser:<br/>
+          <span className="text-white/20">https://docs.google.com/spreadsheets/d/</span>
+          <span className="text-indigo-400 font-semibold">SPREADSHEET_ID_ADA_DI_SINI</span>
+          <span className="text-white/20">/edit</span>
+        </div>
+        {sheetId.trim() && (
+          <div className="mt-2 p-2 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-[10px] flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+            ID terisi: <span className="font-mono text-green-300 truncate">{sheetId.trim()}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Step-by-step Guide */}
+      <div className="card border-indigo-500/20 bg-indigo-500/5">
+        <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">📋 Panduan Setup Lengkap</h3>
+        <div className="space-y-3">
+          {[
+            { step: '1', title: 'Buat Google Spreadsheet', desc: 'Buka Google Sheets → Buat spreadsheet baru → Beri nama "e-Library Database"' },
+            { step: '2', title: 'Salin Spreadsheet ID', desc: 'Dari URL: docs.google.com/spreadsheets/d/[ID_INI]/edit → Copy ID nya' },
+            { step: '3', title: 'Buka Apps Script', desc: 'Di Spreadsheet, klik menu Extensions → Apps Script' },
+            { step: '4', title: 'Paste Kode', desc: 'Hapus kode default → Paste kode Code.gs di bawah (sudah otomatis terisi Spreadsheet ID Anda)' },
+            { step: '5', title: 'Deploy Web App', desc: 'Klik Deploy → New Deployment → Pilih "Web app" → Execute as: Me → Access: Anyone → Deploy' },
+            { step: '6', title: 'Salin URL', desc: 'Copy URL Web App yang muncul → Paste di tab Database → Test Koneksi' },
+          ].map(s => (
+            <div key={s.step} className="flex gap-3">
+              <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0 text-[10px] font-bold text-white">{s.step}</div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-white">{s.title}</div>
+                <div className="text-[10px] text-white/40 leading-relaxed">{s.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Code.gs */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-sm font-bold text-white">📄 Code.gs</h3>
+            <div className="text-[10px] text-white/30">
+              {sheetId.trim()
+                ? <span className="text-green-400/60">✅ Spreadsheet ID terisi otomatis</span>
+                : <span className="text-amber-400/60">⚠️ Isi Spreadsheet ID di atas dulu</span>
+              }
+            </div>
+          </div>
+          <button onClick={copyCode} className="btn-primary text-xs flex items-center gap-1.5 px-4">
+            📋 Salin Kode
+          </button>
+        </div>
+        <pre className="text-[9px] leading-relaxed text-green-400/80 bg-black/40 rounded-xl p-3 overflow-x-auto whitespace-pre max-h-72 scrollable border border-white/5 font-mono">{gasCode}</pre>
+      </div>
+
+      {/* Deploy to GitHub */}
+      <div className="card">
+        <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">🚀 Deploy ke GitHub Pages</h3>
+        <div className="space-y-2">
+          {[
+            'Buat repository baru di GitHub',
+            'Upload file index.html dari folder dist/',
+            'Buka Settings → Pages → Branch: main → Save',
+            'Tunggu 1-2 menit, lalu akses: https://username.github.io/nama-repo',
+          ].map((s, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <span className="text-[10px] text-indigo-400 font-bold mt-0.5">{i + 1}.</span>
+              <span className="text-xs text-white/60">{s}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="card bg-amber-500/5 border-amber-500/20">
+        <h3 className="text-sm font-bold text-amber-400 mb-2">⚠️ Penting</h3>
+        <ul className="text-[10px] text-white/50 space-y-1.5 list-disc list-inside leading-relaxed">
+          <li>Setiap kali update kode, lakukan <strong className="text-white/70">New Deployment</strong> (bukan edit deployment lama)</li>
+          <li>Pastikan akses Web App diset <strong className="text-white/70">"Anyone"</strong> agar bisa diakses dari GitHub Pages</li>
+          <li>Jangan share Spreadsheet ID ke publik karena berisi data password user</li>
+          <li>Backup Spreadsheet secara berkala</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
